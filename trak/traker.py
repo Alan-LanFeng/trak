@@ -31,7 +31,7 @@ from typing import Iterable, Optional, Union
 from pathlib import Path
 from tqdm import tqdm
 from torch import Tensor
-
+from .utils import get_matrix_mult
 import logging
 import numpy as np
 import torch
@@ -658,15 +658,35 @@ class TRAKer:
                     f"Model ID {self.saver.current_model_id} not finalized, cannot score"
                 )
                 continue
+            use_trak = False
+            if use_trak:
+                g = ch.as_tensor(self.saver.current_store["features"], device=self.device)
+                g_target = ch.as_tensor(
+                    self.saver.current_store[f"{exp_name}_grads"], device=self.device
+                )
+            else:
 
-            g = ch.as_tensor(self.saver.current_store["features"], device=self.device)
-            g_target = ch.as_tensor(
-                self.saver.current_store[f"{exp_name}_grads"], device=self.device
-            )
+                all_features = torch.cat((g, g_target), 0)
 
+                all_features.sub_(all_features.mean(0, keepdim=True))
+                xtx_all = self.score_computer.get_xtx(all_features)/all_features.shape[0]
+
+                xtx_all = xtx_all.to(torch.float32)
+                eigvals, eigvecs = torch.linalg.eigh(xtx_all)
+                eigvals_sqrt_inv = torch.diag(1.0 / torch.sqrt(eigvals))  # Inverse of sqrt of eigenvalues
+                whitening_matrix = eigvecs @ eigvals_sqrt_inv @ eigvecs.T
+                whitening_matrix = whitening_matrix.to(torch.float16)
+                all_features = all_features.to(torch.float16)
+                all_features = get_matrix_mult(all_features, whitening_matrix).to(self.device)
+                g = all_features[:g.shape[0]]            
+                g.div_(g.norm(2, -1, keepdim=True).clamp_min(1e-12))
+                g_target = all_features[g.shape[0]:]
+                g_target.div_(g_target.norm(2, -1, keepdim=True).clamp_min(1e-12))
+
+                g = g.to(self.dtype)
+                g_target = g_target.to(self.dtype)
             self.score_computer.get_scores(g, g_target, accumulator=_scores_on_cpu)
-            # .cpu().detach().numpy()
-
+            
             _avg_out_to_losses += self.saver.current_store["out_to_loss"]
             _completed[j] = True
 

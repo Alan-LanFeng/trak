@@ -183,7 +183,8 @@ class BasicScoreComputer(AbstractScoreComputer):
         target_dim = target_grads.shape[0]
 
         self.logger.debug(f"{train_dim=}, {target_dim=}")
-
+        features = features.to(torch.float16)
+        target_grads = target_grads.to(torch.float16)
         accumulator += (
             get_matrix_mult(features=features, target_grads=target_grads).detach().cpu()
         )
